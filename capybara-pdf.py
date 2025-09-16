@@ -294,7 +294,6 @@ spec.find_tables(table_keywords)
 # 
 # R | TYP | DESCRIPTION
 # --+-----+---------------
-# 1 | REF | Create git repository
 # 1 | FEA | Improve logging
 # 1 | FEA | To xml conversion
 # 1 | FEA | Add help
@@ -305,5 +304,5 @@ spec.find_tables(table_keywords)
 # 0 | FEA | Add argparser
 #
 # DONE
+# 1 | REF | Create git repository
 # 1 | REF | Move 'Spec page' code to 'Spec' class
-
