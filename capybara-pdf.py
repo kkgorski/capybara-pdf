@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import sys
 import fitz
 import easyocr
@@ -12,18 +14,6 @@ from lxml import etree
 
 
 class TextEntry:
-    def __init__(self, text, x_char_min, x_min):
-        self.text = text
-        # x coordinate as number of characters
-        self.x_min = x_char_min
-        self.x_max = x_char_min + len(text)
-        # x coordinate as pixels
-        self.x_pix_min = x_min
-
-class SpecPage:
-    def __init__(self):
-        self.lines = {}
-
     def __calc_line_index(self, y, y_max):
         y_percentage = 1 - ((y_max - y) / y_max) # percentage is inverted, because 0th index is topmost line`
         return round(y_percentage * num_of_lines)
@@ -32,34 +22,58 @@ class SpecPage:
         x_percentage = 1 - ((x_max - x) / x_max) # percentage is inverted, because 0th index is leftmost char
         return round(x_percentage * num_of_chars)
 
-    def add(self, bbox, text):
+
+    def __init__(self, bbox, text):
         [(x0, y0), (x1, y1), (x2, y2), (x3, y3)] = bbox
 
-        ys = [i[1] for i in bbox]
         xs = [i[0] for i in bbox]
+        ys = [i[1] for i in bbox]
 
+        #  BBOX definition
         #
+        #  {x3, y3}                    {x2, y2}
         #  +---------------------------+
         #  |                           |
         #  # <- (y_avg, x_min)         |
         #  |                           |
         #  +---------------------------+
+        #  {x0, y0}                    {x1, y1}
         #
 
-        y_avg = sum(ys) / len(ys)
         x_min = min(xs)
-        y_char = self.__calc_line_index(y_avg, pix.height)
-        x_char = self.__calc_char_index(x_min, pix.width)
-        print(f'{text:<50}| {{xc,yc}}={{{x_char:>3},{y_char:>3}}}, {{x,y}}={{{x_min:>5},{y_avg:>5}}}')
+        y_avg = sum(ys) / len(ys)
 
-        text = TextEntry(text, x_char, x_min)
+        x_char = self.__calc_char_index(x_min, pix.width)
+        y_char = self.__calc_line_index(y_avg, pix.height)
+
+        # print(f'{text:<50}| {{xc,yc}}={{{x_char:>3},{y_char:>3}}}, {{x,y}}={{{x_min:>5},{y_avg:>5}}}')
+        print(f'line: {y_char:>3} char: {x_char:>3} {{x,y}}={{{x_min:>5},{y_avg:>5}}} | {text:<60}')
+
+        self.text = text
+        # x coordinate as number of characters
+        self.x_min = x_char
+        self.x_max = x_char + len(text)
+        # x coordinate as pixels
+        self.x_pix_min = x_min
+        # y coordinate as number of characters
+        self.y_avg = y_avg
+        self.y_char = y_char
+
+
+class SpecPage:
+    def __init__(self):
+        self.lines = {}
+
+    def add(self, bbox, text):
+        text = TextEntry(bbox, text)
+        y_char = text.y_char
 
         if y_char not in self.lines:
             self.lines[y_char] = [text]
         else:
             prev_text = self.lines[y_char][-1]
             if prev_text.x_max >= text.x_min:
-                logging.warn(f"Bounding boxes overlap {prev_text.x_max} >= {text.x_min} for \"{prev_text.text}\" and \"{text.text}\"\n" \
+                logging.warning(f"Bounding boxes overlap {prev_text.x_max} >= {text.x_min} for \"{prev_text.text}\" and \"{text.text}\"\n" \
                               "Please increase number of chars")
             self.lines[y_char].append(text)
 
@@ -96,7 +110,7 @@ class Spec():
             for i, page in self.pages.items():
                 page.print(report)
 
-    def debug_print_ocr(ocr):
+    def debug_print_ocr(self, ocr):
         detected_data = []
         for i, detected_text in enumerate(ocr):
             (bbox, text, accuracy) = detected_text
@@ -265,10 +279,11 @@ num_of_lines = 46
 num_of_chars = 140
 table_keywords = ["FIELD", "OFFSET", "LENGTH", "DATA TYPE", "DESCRIPTION"]
 # OCR
-dpi = 200
+dpi = 100
 scale_factor = 2
 # Debug options
 page_filer = [26]
+# Logging
 
 spec = Spec()
 reader = easyocr.Reader(['en'], gpu=False)
@@ -284,7 +299,6 @@ with fitz.open(sys.argv[1]) as doc:
         ocr_creator = OcrCreator(filename, scale_factor)
         ocr_result = ocr_creator.ocr_image()
         spec.process_page_ocr(ocr_result)
-        debug_print_ocr(ocr_result)
 
 spec.print()
 spec.find_tables(table_keywords)
@@ -298,6 +312,7 @@ spec.find_tables(table_keywords)
 # 1 | FEA | To xml conversion
 # 1 | FEA | Add help
 # 0 | FEA | Json config
+# 0 | FEA | Implement OCR cache to skip the ocr process.
 # 0 | FEA | Non ocr version <PROBABLY IMPORTANT>
 # 0 | FEA | Text cut in half detection
 # 0 | FEA | Add margins to the config
