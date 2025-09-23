@@ -10,10 +10,13 @@ from pprint import pprint
 import cv2 as cv
 # sudo apt install libgtk2.0-dev pkg-config
 
+import pickle
+from pathlib import Path
+
 from lxml import etree
 
 
-class TextEntry:
+class AnnotatedText:
     def __calc_line_index(self, y, y_max):
         y_percentage = 1 - ((y_max - y) / y_max) # percentage is inverted, because 0th index is topmost line`
         return round(y_percentage * num_of_lines)
@@ -46,7 +49,6 @@ class TextEntry:
         x_char = self.__calc_char_index(x_min, pix.width)
         y_char = self.__calc_line_index(y_avg, pix.height)
 
-        # print(f'{text:<50}| {{xc,yc}}={{{x_char:>3},{y_char:>3}}}, {{x,y}}={{{x_min:>5},{y_avg:>5}}}')
         print(f'line: {y_char:>3} char: {x_char:>3} {{x,y}}={{{x_min:>5},{y_avg:>5}}} | {text:<60}')
 
         self.text = text
@@ -64,18 +66,16 @@ class SpecPage:
     def __init__(self):
         self.lines = {}
 
-    def add(self, bbox, text):
-        text = TextEntry(bbox, text)
-        y_char = text.y_char
+    def add(self, annotated_text):
+        y_char = annotated_text.y_char
 
         if y_char not in self.lines:
-            self.lines[y_char] = [text]
+            self.lines[y_char] = [annotated_text]
         else:
             prev_text = self.lines[y_char][-1]
-            if prev_text.x_max >= text.x_min:
-                logging.warning(f"Bounding boxes overlap {prev_text.x_max} >= {text.x_min} for \"{prev_text.text}\" and \"{text.text}\"\n" \
-                              "Please increase number of chars")
-            self.lines[y_char].append(text)
+            if prev_text.x_max >= annotated_text.x_min:
+                logging.warning(f"Bounding boxes overlap {prev_text.x_max} >= {annotated_text.x_min} for \"{annotated_text.text}\" and \"{annotated_text.text}\"")
+            self.lines[y_char].append(annotated_text)
 
     def print(self, report):
 
@@ -105,15 +105,76 @@ class Spec():
     def add(self, num, page):
         self.pages[num] = page
 
-    def print(self):
-        with open('out.txt', 'w') as report:
+    def print_as_plaintext(self, filename):
+        with open(filename, 'w') as report:
             for i, page in self.pages.items():
                 page.print(report)
 
+    def process_page_ocr(self, ocr):
+        spec_page = SpecPage()
+        for bbox, text, accuracy in ocr:
+            annotated_text = AnnotatedText(bbox, text)
+            spec_page.add(annotated_text)
+        spec.add(page.number, spec_page)
+
+    def find_tables(self, keywords):
+        tables = []
+
+        for i, page in self.pages.items():
+            table_found = False
+            matching_keywords = {}
+            table = []
+            print(table)
+            for y, texts in page.lines.items():
+
+                if not table_found:
+                    for text in texts:
+                        for keyword in keywords:
+                            if keyword in text.text:
+                                matching_keywords[keyword] = text.x_pix_min
+
+                    if len(matching_keywords) == len(keywords):
+                        table_found = True
+                        print(f"==========--> Table found, line {y} ")
+                        print(texts)
+                        continue
+
+                    if not table_found:
+                        matching_keywords = {} # must be found in the same line
+
+                if table_found:
+
+                    matches = {}
+
+                    print(f'=== Line {y} ============')
+                    for text in texts:
+                        for i, (keyword, x_pix_min) in enumerate(matching_keywords.items()):
+                            my_diff = abs(x_pix_min - text.x_pix_min) < 15.0  # this should be configurable
+                            if my_diff:                                       # ideally calculated from width / height
+                                print(f'{keyword}={text.text}, idx {i}')
+                                matches[keyword] = text
+
+                    if matches:
+                        table.append(matches)
+
+            tables.append(table)
+
+        for table in tables:
+            for matches in table:
+                current_offset = 0
+                pprintable = { keyword : match.text for keyword, match in matches.items() }
+                pprint(pprintable)
+
+
+class OcrCreator:
+    def __init__(self, imgfile, scale_factor = 2):
+        self.image = cv.imread(imgfile)
+        print(pix.width, pix.height)
+        self.scale_factor = scale_factor
+
     def debug_print_ocr(self, ocr):
         detected_data = []
-        for i, detected_text in enumerate(ocr):
-            (bbox, text, accuracy) = detected_text
+        for i, (bbox, text, accuracy) in enumerate(ocr):
 
             printable_bbox = []
             for items in bbox:
@@ -126,85 +187,6 @@ class Spec():
 
         for i, printable_bbox, text, accuracy in detected_data:
             print(i, text, accuracy, printable_bbox)
-
-    def process_page_ocr(self, ocr):
-        spec_page = SpecPage()
-        for detected_text in ocr:
-            (bbox, text, accuracy) = detected_text
-            spec_page.add(bbox, text)
-        spec.add(page.number, spec_page)
-
-        self.debug_print_ocr(ocr)
-
-    def find_tables(self, keywords):
-        for i, page in self.pages.items():
-            table_found = False
-            #x_offsets = None
-            matching_keywords = {}
-            data = [ [] for keyword in keywords ]
-            for y, texts in page.lines.items():
-
-                if not table_found:
-                    for text in texts:
-                        for keyword in keywords:
-                            print(keyword, text.text)
-                            if keyword in text.text:
-                                print("KUBA Match!!!")
-                                matching_keywords[keyword] = text.x_pix_min
-
-                    if len(matching_keywords) > 2:
-                        print(f"=================================================== {matching_keywords}")
-                        len_texts = len(texts)
-                        print(f"len texts {len_texts}")
-
-                    if len(matching_keywords) == len(keywords):
-                        table_found = True
-                        print("============================================================================ OK !!! ")
-                        print(f"Table found, line {y}")
-                        #x_offsets = { keyword : text.x_pix_min for text in texts }
-                        #print(x_offsets)
-
-                    if not table_found:
-                        matching_keywords = {} # must be found in the same line
-
-                if table_found:
-
-                    missing_matches = { keyword : i for i, keyword in enumerate(keywords) }
-                    # set(range(len(matching_keywords.items())))
-
-                    print(f'=== Line {y} ============')
-                    for text in texts:
-                        for i, (keyword, x_pix_min) in enumerate(matching_keywords.items()):
-                            my_diff = abs(x_pix_min - text.x_pix_min) < 15.0  # this should be configurable
-                            if my_diff:                                       # ideally calculated from width / height
-                                print(f'{keyword}={text.text}, idx {i}')
-                                data[i].append(text.text)
-                                try:
-                                    missing_matches.pop(keyword)
-                                except KeyError:
-                                    pass # We have seen stuff at this index, maybe we should append?
-
-                    if missing_matches:
-                        print("Missing matches: ", missing_matches)
-                    print()
-
-                    for i in missing_matches.values():
-                        data[i].append("") # Add empty entries when there was no match
-
-                    # TODO
-                    # create a list of lists padded with "" to represent a table
-
-                        #if text.text == "MatchingUnit":
-                        #    print(x_pix_min)
-                        #    print(f'{keyword}, {text.text}, {text.x_pix_min}, {my_diff}')
-
-            pprint(data)
-
-class OcrCreator:
-    def __init__(self, imgfile, scale_factor = 2):
-        self.image = cv.imread(imgfile) # #TODO IMPORTANT! this thing we changed
-        print(pix.width, pix.height)
-        self.scale_factor = scale_factor # TODO from config
 
     def save_debug(self, name, img, ocr):
         img_annotated = img.copy()
@@ -279,11 +261,13 @@ num_of_lines = 46
 num_of_chars = 140
 table_keywords = ["FIELD", "OFFSET", "LENGTH", "DATA TYPE", "DESCRIPTION"]
 # OCR
-dpi = 100
+dpi = 200
 scale_factor = 2
 # Debug options
 page_filer = [26]
 # Logging
+plaintext_spec_outfile='out.txt'
+
 
 spec = Spec()
 reader = easyocr.Reader(['en'], gpu=False)
@@ -297,10 +281,29 @@ with fitz.open(sys.argv[1]) as doc:
         pix.save(filename)
 
         ocr_creator = OcrCreator(filename, scale_factor)
-        ocr_result = ocr_creator.ocr_image()
+
+        cache_file = f"page{page.number}.pkl"
+        ocr_result = None
+        if Path(cache_file).is_file():
+            print("Cache exists, loading...")
+            with open(cache_file, 'rb') as inp:
+                ocr_result = pickle.load(inp)
+        else:
+            print("Generating OCR")
+            ocr_result = ocr_creator.ocr_image()
+            with open(cache_file, 'wb') as outp:
+                pickle.dump(ocr_result, outp, pickle.HIGHEST_PROTOCOL)
+            print("Cache saved")
+
+        # print("STEP 1 DEBUG PRINT OCR")
+        # ocr_creator.debug_print_ocr(ocr_result)
+        print("STEP 2 PROCESS PAGE")
         spec.process_page_ocr(ocr_result)
 
-spec.print()
+
+print("STEP 3 PRINT SPEC to", plaintext_spec_outfile)
+spec.print_as_plaintext(plaintext_spec_outfile)
+print("STEP 4 FIND TABLES")
 spec.find_tables(table_keywords)
 
 # TODO
@@ -309,6 +312,15 @@ spec.find_tables(table_keywords)
 # R | TYP | DESCRIPTION
 # --+-----+---------------
 # 1 | FEA | Improve logging
+#           == pretty print tables as json
+#           -> several out files
+#           -> use logging instead of print
+# 1 | FEA | Policies
+#           -> policy for 'new match' (new table entry)
+#           -> policy for 'partial match' (not all keywords fit)
+#           -> policy for x_range tolerance
+#           -> add pictures with lines where we look for matches 
+#              and insert newlines
 # 1 | FEA | To xml conversion
 # 1 | FEA | Add help
 # 0 | FEA | Json config
@@ -321,3 +333,4 @@ spec.find_tables(table_keywords)
 # DONE
 # 1 | REF | Create git repository
 # 1 | REF | Move 'Spec page' code to 'Spec' class
+# 1 | FEA | Implement cache
