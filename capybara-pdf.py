@@ -26,7 +26,7 @@ class AnnotatedText:
         return round(x_percentage * num_of_chars)
 
 
-    def __init__(self, bbox, text):
+    def __init__(self, bbox, text, picture_height, picture_width):
         [(x0, y0), (x1, y1), (x2, y2), (x3, y3)] = bbox
 
         xs = [i[0] for i in bbox]
@@ -46,8 +46,8 @@ class AnnotatedText:
         x_min = min(xs)
         y_avg = sum(ys) / len(ys)
 
-        x_char = self.__calc_char_index(x_min, pix.width)
-        y_char = self.__calc_line_index(y_avg, pix.height)
+        x_char = self.__calc_char_index(x_min, picture_width)
+        y_char = self.__calc_line_index(y_avg, picture_height)
 
         print(f'line: {y_char:>3} char: {x_char:>3} {{x,y}}={{{x_min:>5},{y_avg:>5}}} | {text:<60}')
 
@@ -80,10 +80,10 @@ class SpecPage:
     def print(self, report):
 
         prev_y = 0
-        # TODO add first pass where everything is shifted to the left as much as possible. Maybe we can do that somewhere else?
         # TODO add validating pass where x_max is checked against the next x_min. Don't know how to deal with that yet...
         #      ideas -> padding entry for every line in the page
         #            -> rerunning the program with increased line length - I think this should be one of the config params
+        lines = []
         for y, texts in self.lines.items():
             line = ""
             for text in texts:
@@ -91,10 +91,59 @@ class SpecPage:
                     line += " "
                 line += text.text
 
-            print(line, file=report, end='')
+            lines.append(line)
             newlines = y - prev_y
-            [print(file=report) for _ in range(newlines)]
+            if newlines > 1:
+                for _ in range(newlines - 1):
+                    lines.append("")
             prev_y = y
+
+        # Squeeze output horizontically, by finding spaces
+        # on the same char index that appear on each line of the spec
+        #
+        #    BLA BLA     dsajfkdsajfkdsa        fjdskfjdksfjk
+        #     fdjsa      fdjsakfjdsfjkdsa        fjdskfjkds
+        #    fdsjk        fjdksfkjdskjfkd          fdmsafdsla
+        # ^^^       ^^^^^                ^^^^^^^
+        #
+        # We can squeze two and more consecutive spaces
+
+        max_line_num = max([len(line) for line in lines])
+        all_chars = range(max_line_num)
+        vertical_spaces = set(list(range(max_line_num)))
+
+        for line in lines:
+            for char_idx in all_chars:
+                if char_idx < len(line) \
+                and not line[char_idx].isspace():
+                    try:
+                        vertical_spaces.remove(char_idx)
+                    except KeyError:
+                        pass
+
+        print("Vertical spaces")
+        print(vertical_spaces)
+
+        removable_vertical_spaces = set()
+
+        sorted_spaces = sorted(list(vertical_spaces))
+        for prev, next in zip(sorted_spaces, sorted_spaces[1:]):
+            if prev + 1 == next:
+                removable_vertical_spaces.add(prev)
+                removable_vertical_spaces.add(next)
+
+        print("Removable vertical spaces")
+        print(removable_vertical_spaces)
+
+        for line in lines:
+            clean_line = ""
+            for char_idx in range(len(line)):
+                if char_idx not in removable_vertical_spaces:
+                    clean_line += line[char_idx]
+            print(clean_line, file=report)
+
+#        for line in lines:
+#            print(line, file=report)
 
 
 
@@ -110,10 +159,10 @@ class Spec():
             for i, page in self.pages.items():
                 page.print(report)
 
-    def process_page_ocr(self, ocr):
+    def process_page_ocr(self, ocr, picture_height, picture_width):
         spec_page = SpecPage()
         for bbox, text, accuracy in ocr:
-            annotated_text = AnnotatedText(bbox, text)
+            annotated_text = AnnotatedText(bbox, text, picture_height, picture_width)
             spec_page.add(annotated_text)
         spec.add(page.number, spec_page)
 
@@ -136,7 +185,6 @@ class Spec():
                     if len(matching_keywords) == len(keywords):
                         table_found = True
                         print(f"==========--> Table found, line {y} ")
-                        print(texts)
                         continue
 
                     if not table_found:
@@ -146,12 +194,10 @@ class Spec():
 
                     matches = {}
 
-                    print(f'=== Line {y} ============')
                     for text in texts:
                         for i, (keyword, x_pix_min) in enumerate(matching_keywords.items()):
                             my_diff = abs(x_pix_min - text.x_pix_min) < 15.0  # this should be configurable
                             if my_diff:                                       # ideally calculated from width / height
-                                print(f'{keyword}={text.text}, idx {i}')
                                 matches[keyword] = text
 
                     if matches:
@@ -298,7 +344,7 @@ with fitz.open(sys.argv[1]) as doc:
         # print("STEP 1 DEBUG PRINT OCR")
         # ocr_creator.debug_print_ocr(ocr_result)
         print("STEP 2 PROCESS PAGE")
-        spec.process_page_ocr(ocr_result)
+        spec.process_page_ocr(ocr_result, pix.height, pix.width)
 
 
 print("STEP 3 PRINT SPEC to", plaintext_spec_outfile)
@@ -313,6 +359,8 @@ spec.find_tables(table_keywords)
 # --+-----+---------------
 # 1 | FEA | Improve logging
 #           == pretty print tables as json
+#           -> add sequeeze option
+#           -> add outfile opption
 #           -> several out files
 #           -> use logging instead of print
 # 1 | FEA | Policies
